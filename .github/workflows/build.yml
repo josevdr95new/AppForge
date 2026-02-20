@@ -1,0 +1,414 @@
+name: Build Android App
+
+on:
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch:
+    inputs:
+      compile:
+        description: 'Compilar APK'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - 'true'
+          - 'false'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  check-commit:
+    runs-on: ubuntu-latest
+    outputs:
+      compile: ${{ steps.check.outputs.compile }}
+      emulator: ${{ steps.check.outputs.emulator }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check commit message and config
+        id: check
+        run: |
+          MESSAGE="${{ github.event.head_commit.message }}"
+          CONFIG_EMULATOR=$(cat app.config.json | jq -r '.build.emulator // false')
+          
+          if [[ "$MESSAGE" == *"[compile]"* ]] || [[ "$MESSAGE" == *"[compilar]"* ]] || [[ "$MESSAGE" == *"[build]"* ]]; then
+            echo "compile=true" >> $GITHUB_OUTPUT
+            echo "Compilar: true (por keyword)"
+          elif [[ "$MESSAGE" == *"[skip]"* ]] || [[ "$MESSAGE" == *"[noc]"* ]]; then
+            echo "compile=false" >> $GITHUB_OUTPUT
+            echo "Compilar: false (por skip)"
+          else
+            if [ "${{ github.event.inputs.compile }}" = "true" ]; then
+              echo "compile=true" >> $GITHUB_OUTPUT
+              echo "Compilar: true (por input)"
+            else
+              echo "compile=false" >> $GITHUB_OUTPUT
+              echo "Compilar: false (sin keyword)"
+            fi
+          fi
+          
+          echo "emulator=$CONFIG_EMULATOR" >> $GITHUB_OUTPUT
+          echo "Emulator: $CONFIG_EMULATOR"
+
+  build-android:
+    needs: check-commit
+    if: needs.check-commit.outputs.compile == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Read app.config.json
+        id: config
+        run: |
+          CONFIG=$(cat app.config.json)
+          APP_ID=$(echo $CONFIG | jq -r '.appId')
+          APP_NAME=$(echo $CONFIG | jq -r '.appName')
+          VERSION=$(echo $CONFIG | jq -r '.version')
+          VERSION_CODE=$(echo $CONFIG | jq -r '.versionCode')
+          MIN_SDK=$(echo $CONFIG | jq -r '.android.minSdkVersion')
+          TARGET_SDK=$(echo $CONFIG | jq -r '.android.targetSdkVersion')
+          RUN_EMULATOR=$(echo $CONFIG | jq -r '.build.emulator // false')
+          
+          echo "appId=$APP_ID" >> $GITHUB_OUTPUT
+          echo "appName=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "versionCode=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "minSdk=$MIN_SDK" >> $GITHUB_OUTPUT
+          echo "targetSdk=$TARGET_SDK" >> $GITHUB_OUTPUT
+          echo "runEmulator=$RUN_EMULATOR" >> $GITHUB_OUTPUT
+          
+          echo "=================================="
+          echo "App: $APP_NAME ($APP_ID)"
+          echo "Version: $VERSION ($VERSION_CODE)"
+          echo "Android: $MIN_SDK - $TARGET_SDK"
+          echo "Emulator: $RUN_EMULATOR"
+          echo "=================================="
+
+      - name: Update capacitor.config.json
+        run: |
+          APP_ID="${{ steps.config.outputs.appId }}"
+          APP_NAME="${{ steps.config.outputs.appName }}"
+          
+          jq --arg appId "$APP_ID" --arg appName "$APP_NAME" \
+            '.appId = $appId | .appName = $appName' \
+            capacitor.config.json > capacitor.config.tmp && mv capacitor.config.tmp capacitor.config.json
+          
+          echo "Updated capacitor.config.json:"
+          cat capacitor.config.json
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v2
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build Web App
+        run: npm run build
+
+      - name: Add Android Platform
+        run: npx cap add android
+
+      - name: Generate Icons and Splash Screens
+        run: |
+          if [ -f "assets/icon.png" ] || [ -f "assets/logo.png" ]; then
+            echo "Generating app icons and splash screens..."
+            npx @capacitor/assets generate --android \
+              --iconBackgroundColor '#ffffff' \
+              --iconBackgroundColorDark '#111111' \
+              --splashBackgroundColor '#ffffff' \
+              --splashBackgroundColorDark '#111111' \
+              --logoSplashScale 0.3
+            echo "Assets generated successfully"
+            echo ""
+            echo "Checking generated icons:"
+            find android/app/src/main/res -name "ic_launcher*" -type f 2>/dev/null || echo "Checking mipmap..."
+            ls -la android/app/src/main/res/mipmap-* 2>/dev/null || true
+            echo ""
+            echo "Checking generated splash:"
+            find android/app/src/main/res -name "*splash*" -type f 2>/dev/null || echo "No splash found"
+          else
+            echo "No assets found in assets/ folder"
+            echo "Required files:"
+            echo "  - assets/icon.png (1024x1024 min) OR"
+            echo "  - assets/logo.png (1024x1024 min)"
+            echo "  - assets/splash.png (2732x2732 min, optional)"
+          fi
+
+      - name: Configure Android 12+ Splash Screen
+        run: |
+          STYLES_FILE="android/app/src/main/res/values/styles.xml"
+          
+          if [ -f "$STYLES_FILE" ]; then
+            echo "Configuring Android 12+ splash screen..."
+            
+            if grep -q "AppTheme.NoActionBarLaunch" "$STYLES_FILE"; then
+              echo "Updating existing AppTheme.NoActionBarLaunch style..."
+              sed -i '/<style name="AppTheme.NoActionBarLaunch"/,/<\/style>/d' "$STYLES_FILE"
+            fi
+            
+            NEW_STYLE='    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">\n        <item name="windowSplashScreenBackground">@drawable/splash</item>\n        <item name="windowSplashScreenAnimatedIcon">@drawable/splash</item>\n        <item name="windowSplashScreenAnimationDuration">200</item>\n        <item name="postSplashScreenTheme">@style/AppTheme</item>\n    </style>\n'
+            
+            sed -i "s|</resources>|${NEW_STYLE}</resources>|" "$STYLES_FILE"
+            
+            echo "Android 12+ splash configured"
+          fi
+          
+          echo "Final styles.xml:"
+          cat "$STYLES_FILE"
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Update Android Configuration
+        run: |
+          VERSION_CODE="${{ steps.config.outputs.versionCode }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          MIN_SDK="${{ steps.config.outputs.minSdk }}"
+          TARGET_SDK="${{ steps.config.outputs.targetSdk }}"
+          
+          echo "Updating root build.gradle (SDK versions)..."
+          cd android
+          sed -i "s/ext\.minSdkVersion *= *[0-9]*/ext.minSdkVersion = $MIN_SDK/" build.gradle
+          sed -i "s/ext\.targetSdkVersion *= *[0-9]*/ext.targetSdkVersion = $TARGET_SDK/" build.gradle
+          echo "Root build.gradle:"
+          grep "ext\." build.gradle || true
+          
+          echo ""
+          echo "Updating app build.gradle (version)..."
+          cd app
+          sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" build.gradle
+          sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" build.gradle
+          echo "App build.gradle:"
+          grep -E "versionCode|versionName" build.gradle || true
+
+      - name: Configure Android Permissions
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          CONFIG="app.config.json"
+          
+          PERMS=$(jq -r '.android.permissions[]?' "$CONFIG" 2>/dev/null)
+          
+          if [ -n "$PERMS" ]; then
+            while IFS= read -r perm; do
+              if [ -n "$perm" ] && ! grep -q "$perm" "$MANIFEST"; then
+                sed -i "/<\/manifest>/i \    <uses-permission android:name=\"$perm\" />" "$MANIFEST"
+                echo "Added permission: $perm"
+              fi
+            done <<< "$PERMS"
+          fi
+          
+          echo "AndroidManifest.xml permissions:"
+          grep "uses-permission" "$MANIFEST" || true
+
+      - name: Configure Deep Links
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          CONFIG="app.config.json"
+          
+          DEEP_LINKS_ENABLED=$(jq -r '.deepLinks.enabled // false' "$CONFIG")
+          
+          if [ "$DEEP_LINKS_ENABLED" = "true" ]; then
+            SCHEME=$(jq -r '.deepLinks.scheme // "miapp"' "$CONFIG")
+            HOST=$(jq -r '.deepLinks.host // ""' "$CONFIG")
+            APP_ID="${{ steps.config.outputs.appId }}"
+            
+            echo "Configuring Deep Links..."
+            echo "  Scheme: $SCHEME"
+            echo "  Host: $HOST"
+            
+            DEEP_LINK_INTENT=""
+            
+            DEEP_LINK_INTENT="${DEEP_LINK_INTENT}        <intent-filter>\n"
+            DEEP_LINK_INTENT="${DEEP_LINK_INTENT}            <action android:name=\"android.intent.action.VIEW\" />\n"
+            DEEP_LINK_INTENT="${DEEP_LINK_INTENT}            <category android:name=\"android.intent.category.DEFAULT\" />\n"
+            DEEP_LINK_INTENT="${DEEP_LINK_INTENT}            <category android:name=\"android.intent.category.BROWSABLE\" />\n"
+            DEEP_LINK_INTENT="${DEEP_LINK_INTENT}            <data android:scheme=\"$SCHEME\" />\n"
+            DEEP_LINK_INTENT="${DEEP_LINK_INTENT}        </intent-filter>\n"
+            
+            if [ -n "$HOST" ] && [ "$HOST" != "null" ]; then
+              DEEP_LINK_INTENT="${DEEP_LINK_INTENT}        <intent-filter android:autoVerify=\"true\">\n"
+              DEEP_LINK_INTENT="${DEEP_LINK_INTENT}            <action android:name=\"android.intent.action.VIEW\" />\n"
+              DEEP_LINK_INTENT="${DEEP_LINK_INTENT}            <category android:name=\"android.intent.category.DEFAULT\" />\n"
+              DEEP_LINK_INTENT="${DEEP_LINK_INTENT}            <category android:name=\"android.intent.category.BROWSABLE\" />\n"
+              DEEP_LINK_INTENT="${DEEP_LINK_INTENT}            <data android:scheme=\"https\" android:host=\"$HOST\" />\n"
+              DEEP_LINK_INTENT="${DEEP_LINK_INTENT}            <data android:scheme=\"http\" android:host=\"$HOST\" />\n"
+              DEEP_LINK_INTENT="${DEEP_LINK_INTENT}        </intent-filter>"
+            fi
+            
+            sed -i "/<\/activity>/i \\$DEEP_LINK_INTENT" "$MANIFEST"
+            
+            echo "Deep Links configured!"
+            echo "Test with: adb shell am start -a android.intent.action.VIEW -d \"$SCHEME://test\""
+            if [ -n "$HOST" ]; then
+              echo "App Links: https://$HOST"
+            fi
+          else
+            echo "Deep Links disabled"
+          fi
+
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: |
+          APK_NAME="${{ steps.config.outputs.appName }}-v${{ steps.config.outputs.version }}"
+          APK_NAME=$(echo "$APK_NAME" | tr ' ' '-')
+          
+          cd android/app/build/outputs/apk/debug
+          mv app-debug.apk "${APK_NAME}.apk"
+          echo "APK renamed to: ${APK_NAME}.apk"
+          echo "APK_PATH=$(pwd)/${APK_NAME}.apk" >> $GITHUB_ENV
+
+      - name: Verify APK
+        run: ls -la android/app/build/outputs/apk/debug/
+
+      - name: Enable KVM group perms
+        if: steps.config.outputs.runEmulator == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Emulator and Test APK
+        if: steps.config.outputs.runEmulator == 'true'
+        run: |
+          echo "Starting Android Emulator..."
+          
+          mkdir -p screenshots
+          
+          API_LEVEL="${{ steps.config.outputs.targetSdk }}"
+          if [ -z "$API_LEVEL" ] || [ "$API_LEVEL" = "null" ]; then
+            API_LEVEL=34
+          fi
+          
+          echo "Installing emulator..."
+          sdkmanager "emulator" "platform-tools" "platforms;android-$API_LEVEL" "system-images;android-$API_LEVEL;google_apis;x86_64"
+          
+          echo "ANDROID_HOME: $ANDROID_HOME"
+          ls -la $ANDROID_HOME/emulator/ 2>/dev/null || echo "Emulator folder not found at ANDROID_HOME"
+          
+          echo "Adding emulator to PATH..."
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          
+          export PATH=$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools
+          
+          echo "Creating AVD..."
+          echo "no" | avdmanager create avd -n test_avd -k "system-images;android-$API_LEVEL;google_apis;x86_64" --device "Nexus 6"
+          
+          echo "Starting emulator in background..."
+          emulator -avd test_avd -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none &
+          EMULATOR_PID=$!
+          
+          echo "Waiting for emulator to boot (up to 5 minutes)..."
+          adb wait-for-device
+          sleep 10
+          
+          BOOT_COMPLETE=""
+          TIMEOUT=300
+          ELAPSED=0
+          while [ -z "$BOOT_COMPLETE" ] && [ $ELAPSED -lt $TIMEOUT ]; do
+            BOOT_COMPLETE=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+            echo "Waiting for boot... ($ELAPSED seconds)"
+          done
+          
+          if [ -z "$BOOT_COMPLETE" ]; then
+            echo "Emulator failed to boot"
+            exit 1
+          fi
+          
+          echo "Emulator booted successfully!"
+          adb devices
+          
+          echo "Installing APK..."
+          adb install -r ${{ env.APK_PATH }}
+          
+          if [ $? -ne 0 ]; then
+            echo "Failed to install APK"
+            adb shell screencap -p /sdcard/screenshot_error.png
+            adb pull /sdcard/screenshot_error.png screenshots/error.png
+            exit 1
+          fi
+          
+          echo "APK installed successfully"
+          
+          APP_ID="${{ steps.config.outputs.appId }}"
+          
+          echo "Launching app..."
+          LAUNCH_ACTIVITY=$(adb shell cmd package resolve-activity --brief $APP_ID | tail -n 1)
+          if [ -n "$LAUNCH_ACTIVITY" ]; then
+            echo "Found launch activity: $LAUNCH_ACTIVITY"
+            adb shell am start -n $LAUNCH_ACTIVITY
+          else
+            echo "Using monkey to launch app..."
+            adb shell monkey -p $APP_ID -c android.intent.category.LAUNCHER 1
+          fi
+          sleep 5
+          
+          echo "Waiting 30 seconds before first screenshot..."
+          sleep 30
+          
+          echo "Taking screenshot 1..."
+          adb shell screencap -p /sdcard/screenshot1.png
+          adb pull /sdcard/screenshot1.png screenshots/screenshot_01_initial.png
+          
+          echo "Waiting 30 seconds before second screenshot..."
+          sleep 30
+          
+          echo "Taking screenshot 2..."
+          adb shell screencap -p /sdcard/screenshot2.png
+          adb pull /sdcard/screenshot2.png screenshots/screenshot_02_after.png
+          
+          echo "Waiting 30 seconds before third screenshot..."
+          sleep 30
+          
+          echo "Taking screenshot 3..."
+          adb shell screencap -p /sdcard/screenshot3.png
+          adb pull /sdcard/screenshot3.png screenshots/screenshot_03_final.png
+          
+          echo "Shutting down emulator..."
+          adb shell reboot -p || true
+          kill $EMULATOR_PID 2>/dev/null || true
+          
+          echo "Screenshots taken:"
+          ls -la screenshots/
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: App-Instalable
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload Screenshots Artifact
+        if: steps.config.outputs.runEmulator == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Emulator-Screenshots
+          path: screenshots/
+          retention-days: 30
+          if-no-files-found: warn

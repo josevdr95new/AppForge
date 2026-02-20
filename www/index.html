@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Content-Security-Policy" content="default-src *; script-src * 'unsafe-inline' 'unsafe-eval'; style-src * 'unsafe-inline'; img-src * data: https:; connect-src *">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <title>Mi App</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="app">
+        <h1>Mi App <span id="app-version"></span></h1>
+        
+        <div class="card">
+            <h2>Bienvenido</h2>
+            <p>Aplicacion Android creada con AppForge + Capacitor.</p>
+        </div>
+        
+        <div class="card">
+            <h2>Camera</h2>
+            <p>Tomar foto o seleccionar de galeria:</p>
+            <button onclick="handleTakePhoto()">Tomar Foto</button>
+            <button onclick="handlePickImage()">Galeria</button>
+            <div id="photo-container"></div>
+        </div>
+        
+        <div class="card">
+            <h2>Geolocation</h2>
+            <p>Obtener ubicacion GPS:</p>
+            <button onclick="handleGetLocation()">Obtener Ubicacion</button>
+            <p id="location-result"></p>
+        </div>
+        
+        <div class="card">
+            <h2>Network</h2>
+            <p>Estado de la red:</p>
+            <button onclick="handleGetNetwork()">Verificar Red</button>
+            <p id="network-result"></p>
+        </div>
+        
+        <div class="card">
+            <h2>Almacenamiento</h2>
+            <p>Guardar datos con Preferences:</p>
+            <input type="text" id="dataInput" placeholder="Escribe algo...">
+            <button onclick="handleSaveData()">Guardar</button>
+            <button onclick="handleLoadData()">Cargar</button>
+            <p id="storage-result"></p>
+        </div>
+        
+        <div class="card">
+            <h2>Enlaces Externos</h2>
+            <p>Abrir enlaces en navegador externo:</p>
+            <a href="#" class="external-url" data-url="https://www.google.com">Abrir Google</a>
+        </div>
+        
+        <div class="card">
+            <h2>Deep Links</h2>
+            <p>Probar deep links (simulacion):</p>
+            <div id="deep-link-log" style="min-height:20px;margin-bottom:10px;"></div>
+            <button onclick="testDeepLink('miapp://producto/12345?ref=email')">Producto</button>
+            <button onclick="testDeepLink('miapp://usuario/juan123')">Usuario</button>
+            <button onclick="testDeepLink('miapp://configuracion?tab=seguridad')">Config</button>
+            <button onclick="testDeepLink('miapp://promo/VERANO2025?descuento=30')">Promo</button>
+            <button onclick="testDeepLink('miapp://reset-password?token=abc123xyz789')">Reset Pass</button>
+            <button onclick="testDeepLink('miapp://verify-email?token=verify123')">Verify Email</button>
+            <p style="margin-top:15px;font-size:12px;color:#666;">
+                <strong>Ejemplos de uso real:</strong><br>
+                <code>adb shell am start -a android.intent.action.VIEW -d "miapp://producto/123"</code><br>
+                <code>adb shell am start -a android.intent.action.VIEW -d "https://miapp.com/promo/VERANO"</code>
+            </p>
+        </div>
+    </div>
+    
+    <script src="js/app.js"></script>
+    <script>
+        const handleTakePhoto = async () => {
+            const photo = await takePhoto();
+            if (photo) {
+                document.getElementById('photo-container').innerHTML = 
+                    '<img src="' + photo + '" style="max-width:100%;margin-top:10px;border-radius:8px;">';
+                showToast('Foto tomada!');
+            }
+        };
+        
+        const handlePickImage = async () => {
+            const photo = await pickImage();
+            if (photo) {
+                document.getElementById('photo-container').innerHTML = 
+                    '<img src="' + photo + '" style="max-width:100%;margin-top:10px;border-radius:8px;">';
+                showToast('Imagen seleccionada!');
+            }
+        };
+        
+        const handleGetLocation = async () => {
+            const location = await getLocation();
+            if (location) {
+                document.getElementById('location-result').textContent = 
+                    'Lat: ' + location.lat.toFixed(6) + ', Lng: ' + location.lng.toFixed(6);
+            }
+        };
+        
+        const handleGetNetwork = async () => {
+            const status = await getNetworkStatus();
+            document.getElementById('network-result').textContent = 
+                'Conectado: ' + status.connected + ', Tipo: ' + status.connectionType;
+        };
+        
+        const handleSaveData = async () => {
+            const value = document.getElementById('dataInput').value;
+            await saveData('demo', value);
+            showToast('Guardado: ' + value);
+        };
+        
+        const handleLoadData = async () => {
+            const value = await loadData('demo', '');
+            document.getElementById('storage-result').textContent = 'Cargado: ' + value;
+        };
+        
+        const testDeepLink = (url) => {
+            console.log('Testing deep link:', url);
+            const route = parseDeepLink(url);
+            if (route) {
+                handleDeepLinkRoute(route);
+            }
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{
+  "appId": "com.ejemplo.miapp",
+  "appName": "Mi App ok",
+  "version": "1.0.0",
+  "versionCode": 1,
+  "description": "Descripcion de mi aplicacion",
+  "author": {
+    "name": "Mi Nombre",
+    "email": "email@ejemplo.com",
+    "url": "https://ejemplo.com"
+  },
+  "android": {
+    "minSdkVersion": 24,
+    "targetSdkVersion": 34,
+    "compileSdkVersion": 34,
+    "permissions": [
+      "android.permission.INTERNET",
+      "android.permission.ACCESS_NETWORK_STATE",
+      "android.permission.CAMERA",
+      "android.permission.READ_EXTERNAL_STORAGE",
+      "android.permission.WRITE_EXTERNAL_STORAGE",
+      "android.permission.ACCESS_FINE_LOCATION",
+      "android.permission.ACCESS_COARSE_LOCATION"
+    ]
+  },
+  "deepLinks": {
+    "enabled": false,
+    "scheme": "miapp",
+    "host": "miapp.com",
+    "paths": [
+      "/producto/:id",
+      "/usuario/:username",
+      "/configuracion",
+      "/promo/:codigo"
+    ]
+  },
+  "build": {
+    "compile": true,
+    "emulator": false
+  }
+}
